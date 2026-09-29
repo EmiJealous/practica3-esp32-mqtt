@@ -1,0 +1,114 @@
+FUNCIONAMIENTO DE LA PRACTICA 3 - LED RGB por WiFi + MQTT
+=============================================================
+
+QUE HACE EN GENERAL
+--------------------
+Esta practica reemplaza el Bluetooth (BLE) de la practica anterior por WiFi
+y MQTT. El ESP32 se conecta a mi red WiFi y despues a un broker Mosquitto
+que corre local en mi compu. A partir de ahi, todo el control del sistema
+(prender/apagar el LED, cambiar de color, forzar una frecuencia de
+parpadeo, pedir el estado) se hace mandando mensajes de texto a un topico
+MQTT, y el ESP32 responde publicando en otros topicos.
+
+El circuito tiene un LED RGB (tres pines, uno por color), un boton fisico
+y un potenciometro. La logica de fondo (antirrebote del boton, parpadeo
+sin usar delay) es basicamente la misma que ya habia hecho en la practica
+anterior con BLE, solo que ahora en vez de notificar por Bluetooth, publico
+en topicos MQTT.
+
+
+CONEXION WIFI Y MQTT
+----------------------
+Al arrancar, el ESP32 primero se conecta a la red WiFi y despues al broker
+MQTT. Si en algun momento se cae la conexion (WiFi o MQTT), el loop se da
+cuenta y se reconecta solo, no hace falta reiniciar el ESP32 a mano.
+
+Tambien configure un "Last Will and Testament" (LWT): es un mensaje que el
+broker manda automaticamente en mi nombre si el ESP32 se desconecta de
+forma inesperada (por ejemplo si se queda sin señal o se apaga de golpe).
+En mi caso, ese mensaje avisa "OFFLINE" en el topico de estado del
+dispositivo. Y cuando la conexion se hace bien, yo mismo publico "ONLINE"
+apenas conecto, para que se sepa que el equipo esta activo.
+
+
+ESTRUCTURA DE TOPICOS
+-----------------------
+Todos mis topicos empiezan con "iot/<mi_equipo>/" para no chocar con los
+de otros equipos que usen el mismo broker. Uso cinco:
+
+- light/control -> aqui es donde YO ESCUCHO comandos que me manden (ON,
+  OFF, COLOR:RED, COLOR:GREEN, COLOR:BLUE, BLINK:x, AUTO, STATUS).
+- light/status -> aqui publico el estado actual de la luz cada vez que
+  algo cambia (modo, color, frecuencia si aplica, tiempo desde el ultimo
+  cambio y lectura del potenciometro). Lo publico con "retain" para que
+  si alguien se conecta despues, vea de inmediato el ultimo estado sin
+  tener que esperar a que yo cambie algo.
+- device/status -> aqui publico si el dispositivo esta ONLINE u OFFLINE
+  (esto ultimo lo maneja solo el broker con el LWT que mencione arriba).
+- button/event -> aqui publico cada vez que presiono el boton fisico.
+- pot/value -> aqui publico la lectura del potenciometro, una vez por
+  segundo, ya convertida a porcentaje (0 a 100%).
+
+
+CONTROL DEL LED RGB (COMANDOS)
+---------------------------------
+Cuando me llega un mensaje en light/control, lo limpio (le quito espacios
+y lo paso a mayusculas) y reviso cual de los comandos conocidos es:
+
+- ON / OFF: prenden o apagan el sistema completo.
+- COLOR:RED / COLOR:GREEN / COLOR:BLUE: cambian que color va a usar el LED
+  RGB (solo enciendo el pin del color elegido, los otros dos quedan
+  apagados).
+- BLINK:x: fuerza que el LED parpadee a una frecuencia fija de x Hz.
+- AUTO: le devuelve el control al circuito local, es decir, deja de usar
+  la frecuencia forzada y vuelve a usar el potenciometro para decidir que
+  tan rapido parpadea (asi funcionaba por defecto en la practica pasada).
+- STATUS: no cambia nada, solo hace que publique el estado actual al
+  momento.
+
+Cada vez que un comando cambia algo de verdad (no un STATUS ni un comando
+invalido), publico el nuevo estado en light/status automaticamente. Asi
+cualquiera que este viendo ese topico se entera del cambio sin tener que
+estar preguntando.
+
+El "modo" que reporto puede ser ON, OFF o BLINK: ON significa que esta
+prendido y parpadeando segun el potenciometro (control automatico), BLINK
+significa que esta parpadeando a la frecuencia que yo forcé con un
+comando, y OFF que esta apagado.
+
+
+BOTON FISICO
+--------------
+El boton usa el mismo filtro antirrebote (debounce) de la practica
+anterior: espero 50 milisegundos despues de cualquier cambio en la
+lectura del pin para confirmar que es un clic real y no un falso contacto
+del metal del boton.
+
+Cada vez que confirmo un clic, hago dos cosas:
+1. Sumo uno a un contador de presiones y publico ese numero en
+   button/event (por ejemplo "BUTTON_PRESSED: 7").
+2. Reviso cuanto tiempo paso desde el clic anterior. Si fue menos de 400
+   milisegundos, publico ademas un mensaje aparte de doble clic
+   ("BUTTON_DOUBLE_CLICK"), para poder detectar cuando presiono dos veces
+   rapido.
+
+
+POTENCIOMETRO
+----------------
+Ademas de usarse para controlar la velocidad de parpadeo cuando estoy en
+modo automatico, cada un segundo leo el potenciometro por separado, lo
+normalizo de 0 a 100% (la lectura cruda va de 0 a 4095) y lo publico en
+pot/value. Esto es independiente de si el LED esta prendido o no, siempre
+se esta reportando.
+
+
+RESUMEN DE LA ADAPTACION RESPECTO A LA PRACTICA ANTERIOR
+------------------------------------------------------------
+En pocas palabras, lo que cambie fue el "medio" de comunicacion (de BLE a
+WiFi/MQTT) y el actuador (de un LED simple a uno RGB con seleccion de
+color). La logica de negocio de fondo -antirrebote del boton, parpadeo no
+bloqueante con millis(), y la idea de un modo ON/OFF/BLINK controlado por
+comandos remotos- es practicamente la misma que ya tenia funcionando, solo
+que ahora en vez de "notificar por BLE" hago "publicar en un topico MQTT",
+y en vez de escuchar "onWrite de una caracteristica BLE" escucho "mensajes
+en el topico light/control".

@@ -1,0 +1,11 @@
+# Credenciales locales - cada quien tiene las suyas, nunca se suben
+practica3/secrets.h
+
+# Artefactos de compilacion de Arduino
+build/
+*.bin
+*.elf
+*.map
+
+# macOS
+.DS_Store
